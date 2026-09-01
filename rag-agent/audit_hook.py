@@ -2,9 +2,9 @@
 
 [step-2] 감사 이벤트 수집 SDK 클라이언트.
 
-audit-engine(AuditEvent 스키마)을 이용해 감사 이벤트를 구성하고 raw events 파일에
+audit_engine(AuditEvent 스키마)을 이용해 감사 이벤트를 구성하고 raw events 파일에
 append 하는 얇은 클라이언트. 해시체인 검증/마스킹/암호화/보관정책 계산은 이 클라이언트의
-책임이 아니다 — 별도 배치(audit-engine)가 처리한다(plan.md 흐름 A/B 분리 참고).
+책임이 아니다 — 별도 배치(audit_engine)가 처리한다(plan.md 흐름 A/B 분리 참고).
 
 수집 지점(어디서 호출하는가)에 대한 가정을 갖지 않도록 순수 인터페이스로 둔다:
 actor/role/department/source_ip 등은 전부 호출자(5-api.py)가 채워서 넘긴다.
@@ -13,7 +13,6 @@ actor/role/department/source_ip 등은 전부 호출자(5-api.py)가 채워서 �
 from __future__ import annotations
 
 import fcntl
-import importlib.util
 import json
 import os
 import sys
@@ -23,7 +22,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent  # d06
-AUDIT_ENGINE_DIR = BASE_DIR / "audit-engine"
+
+# audit_engine 이 d06 바로 아래의 정규 패키지(언더스코어 이름)라 일반 import로 충분하다.
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+import audit_engine as AE  # noqa: E402
 
 PURPOSE_MAX_LEN = 500
 
@@ -36,27 +39,6 @@ ACTION_MAP = {
     "tool_document_summary": "document_summary",
     "direct_llm_response": "direct_llm_response",
 }
-
-
-def _load_audit_engine():
-    """audit-engine 디렉터리명이 하이픈이라 일반 import가 불가능해 경로 로딩으로 우회한다."""
-    if "audit_engine" in sys.modules:
-        return sys.modules["audit_engine"]
-
-    spec = importlib.util.spec_from_file_location(
-        "audit_engine",
-        AUDIT_ENGINE_DIR / "__init__.py",
-        submodule_search_locations=[str(AUDIT_ENGINE_DIR)],
-    )
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"audit-engine 을 로드할 수 없습니다: {AUDIT_ENGINE_DIR}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["audit_engine"] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-AE = _load_audit_engine()
 
 
 def _utc_now_iso() -> str:
@@ -75,7 +57,7 @@ class AuditEventClient:
     @staticmethod
     def map_action(tool_name: str) -> str:
         """4-agent.py 의 tool_name 을 AuditEvent.action 값으로 변환한다.
-        매핑에 없는 값은 그대로 통과시킨다 — 새 action 은 audit-engine 의
+        매핑에 없는 값은 그대로 통과시킨다 — 새 action 은 audit_engine 의
         retention_policy.default_policy 로 자연스럽게 폴백된다."""
         return ACTION_MAP.get(tool_name, tool_name)
 

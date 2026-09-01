@@ -25,7 +25,7 @@ flowchart TB
 
     subgraph BatchFlow["흐름 B · 배치 검증 (비동기, cron)"]
         direction TB
-        Batch["배치 워커\nimportlib로 audit-engine 로드"]
+        Batch["배치 워커\nimportlib로 audit_engine 로드"]
         Inspect["AuditEngine.inspect()"]
         FormatCheck{"이미 해시체인\n결과 포맷?"}
         Build["build_chain()\n신규 체인 생성 (항상 valid)"]
@@ -59,11 +59,11 @@ flowchart TB
 
 ### step-1 : 관련 모듈 가져오기 (완료)
 d06 에 d06/rag-agent : Ch01/d05의 rag-agent 부분
-d06/audit-engine : Ch03/d05의 src/audit_engine
+d06/audit_engine : Ch03/d05의 src/audit_engine
 
 - rag-agent : 1-documents.py, 2-embeddings.py, 3-1-llm.py, 3-2-rag.py, 4-agent.py, 5-api.py, documents.txt
   (lab01~03 취약 챗봇 실습 파일은 별도 주제로 판단하여 제외)
-- audit-engine : Ch03/d05/src/audit_engine 전체 (해시체인 + 보관정책 + 암호화/마스킹 통합 점검 엔진)
+- audit_engine : Ch03/d05/src/audit_engine 전체 (해시체인 + 보관정책 + 암호화/마스킹 통합 점검 엔진)
 
 ### step-2 : 감사 이벤트 수집 · 검증 파이프라인 연동 (구현 완료)
 
@@ -82,19 +82,19 @@ d06/audit-engine : Ch03/d05의 src/audit_engine
 **구성 요소**
 
 - [rag-agent/audit_hook.py](Ch03/d06/rag-agent/audit_hook.py) (구현 완료): `AuditEventClient` SDK 클라이언트 클래스.
-  audit-engine은 디렉터리명이 하이픈(`audit-engine`)이라 `import audit_engine`으로 직접 임포트할 수
-  없다 — 4-agent.py/5-api.py가 이미 쓰는 importlib 경로 로딩 패턴을 그대로 재사용해 audit-engine/__init__.py를
-  모듈명 `audit_engine`으로 로드한다(폴더명 변경 없이 기존 관례 유지). 라우트 코드에 append 로직이
-  직접 섞이지 않도록 `client.log(**fields)` 인터페이스로 분리 — 수집 지점(API 계층)과 로깅 구현을 독립시켰다.
+  audit_engine 디렉터리를 d06 아래의 정규 패키지(언더스코어 이름)로 두고 있어 `sys.path`에 d06을
+  추가한 뒤 `import audit_engine`으로 그냥 불러온다(아래 "audit_engine 패키지 통일" 참고 — 처음엔
+  하이픈 이름(`audit-engine`)이라 importlib 경로 로딩 워크어라운드가 필요했는데, 이후 언더스코어로
+  통일하며 제거했다). 라우트 코드에 append 로직이 직접 섞이지 않도록 `client.log(**fields)`
+  인터페이스로 분리 — 수집 지점(API 계층)과 로깅 구현을 독립시켰다.
 - [rag-agent/5-api.py](Ch03/d06/rag-agent/5-api.py) (구현 완료): `/rag`, `/agent`에 `X-Actor`/`X-Role`/`X-Department`
   헤더 파라미터를 추가하고 `AuditEventClient`를 호출한다. 성공 응답은 `BackgroundTasks`로 기록해
   요청 처리 자체가 감사 결과를 기다리지 않는다. **단, 실패(예외) 경로는 동기로 기록한다** — 아래
   "구현 중 발견한 이슈" 참고.
-- 배치 실행: 기존 `audit-engine/__main__.py` 로직을 재사용하되, 디렉터리명이 하이픈(`audit-engine`)이라
-  `python -m audit_engine`은 애초에 실행 불가능하다(모듈명에 하이픈 불가) — importlib 경로 로딩으로
-  `audit-engine/__init__.py`를 `audit_engine`이라는 이름으로 로드한 뒤 그 안의 로직을 호출하는
-  래퍼 스크립트를 cron/주기 작업으로 돌린다(검증 단계에서 [scenarios/run_audit_scenarios.py](Ch03/d06/scenarios/run_audit_scenarios.py)로
-  이 로딩 방식 자체를 확인 완료).
+- 배치 실행: `audit_engine/__main__.py`를 그대로 CLI로 쓴다 — `python -m audit_engine <log_file>`을
+  cron/주기 작업으로 돌린다. (처음엔 디렉터리명이 하이픈이라 이 명령 자체가 불가능해서 importlib
+  래퍼가 필요했었는데, "audit_engine 패키지 통일" 이후 표준 `-m` 실행이 그대로 된다 — 실제로
+  재검증함.)
 - 저장 경로: `d06/outputs/raw_events/rag_agent_events.json` (append 대상),
   `d06/outputs/audit_engine/report_<timestamp>.json` (배치 산출물).
 
@@ -146,18 +146,19 @@ d06/audit-engine : Ch03/d05의 src/audit_engine
 ### 감사 시나리오 검증 (완료)
 
 step-2/3 설계의 전제(정책 미매핑 시 default 폴백, 마스킹 4종 탐지, 해시체인 위변조 탐지)를
-실제 audit-engine 파이프라인으로 검증했다. 구현 착수 전 어셈블리 자체가 동작하는지 먼저 확인하는 단계.
+실제 audit_engine 파이프라인으로 검증했다. 구현 착수 전 어셈블리 자체가 동작하는지 먼저 확인하는 단계.
 
-- 수정: `audit-engine/__main__.py`의 `base_dir` 계산이 옛 구조(`d05/src/audit_engine`, 3단계 상위)
-  기준이었던 것을 현재 평탄화된 구조(`d06/audit-engine`, 2단계 상위)에 맞게 고침. 안 고치면 config/output
+- 수정: `audit_engine/__main__.py`의 `base_dir` 계산이 옛 구조(`d05/src/audit_engine`, 3단계 상위)
+  기준이었던 것을 현재 평탄화된 구조(`d06/audit_engine`, 2단계 상위)에 맞게 고침. 안 고치면 config/output
   경로가 `Ch03/`으로 잘못 잡힌다.
 - 신규: [configs/audit_engine_config.json](Ch03/d06/configs/audit_engine_config.json) — Ch03/d05 설정을 그대로 복사(정책 내용 변경 없음).
 - 신규: [scenarios/rag_audit_events.json](Ch03/d06/scenarios/rag_audit_events.json) — RAG 에이전트 형태의 감사 이벤트 8건
   (마스킹 email/phone/name/card 각 1건, 실패 결과 1건, 신규 action 2종(`rag_query`/`direct_llm_response`)의
   default 폴백 확인, 기존 enterprise 정책(`export_pii`, 730일)과의 대조 1건).
-- 신규: [scenarios/run_audit_scenarios.py](Ch03/d06/scenarios/run_audit_scenarios.py) — importlib로 audit-engine을
-  로드해 8개 시나리오를 `inspect()` + `run_verification()`에 통과시키고 기대값과 대조, 이어서 해시체인 결과를
-  조작해 위변조 탐지까지 확인.
+- 신규: [scenarios/run_audit_scenarios.py](Ch03/d06/scenarios/run_audit_scenarios.py) — (당시엔 importlib로
+  audit_engine을 로드했으나, 이후 "audit_engine 패키지 통일"에서 일반 import로 단순화됨) 8개 시나리오를
+  `inspect()` + `run_verification()`에 통과시키고 기대값과 대조, 이어서 해시체인 결과를 조작해 위변조
+  탐지까지 확인.
 
 **결과**: 8개 시나리오 전부 PASS, 4단계 파이프라인 재검증(hash_chain/masking/encryption/retention) 전부 PASS,
 위변조 탐지(entry #3 조작) PASS.
@@ -241,9 +242,33 @@ receiving updates or bug fixes. Please switch to the google.genai package as soo
   깨지기 쉬움 — step-4에서도 실제 도구 선택 정확도는 검증하지 못했다(API 키 없음). (여전히 미결정)
 - `google.generativeai` 지원 종료(위 "중요 발견" 참고) — 언제 `google-genai`로 옮길지는 별도 결정.
 
-### step-4 : rag-agent 및 audit-engine 통합 테스트 시나리오 (부분 실행 완료)
+### audit_engine 패키지 통일 (완료)
 
-앞서 완료한 "감사 시나리오 검증"은 `AuditEvent`를 직접 구성해 audit-engine 파이프라인만 단독 검증한
+처음(step-1)에 audit_engine을 `rag-agent`와 이름 스타일을 맞추려고 하이픈 디렉터리명
+(`audit-engine`)으로 가져왔는데, 그 대가로 일반 `import`도 `python -m audit_engine`도 안 되는
+워크어라운드(importlib 경로 로딩)가 코드 전반(`audit_hook.py`, `run_audit_scenarios.py`,
+`audit_engine/__main__.py`의 base_dir 계산 등)에 깔려 있었다. "SDK로 통일"이라는 요청의 취지를
+다시 짚어보면, 에이전트 쪽만 진짜 SDK(`google.generativeai`)를 쓰고 audit_engine 쪽은 워크어라운드로
+남아있는 게 일관성이 없다는 지적이었다 — 그래서 audit_engine도 정규 패키지로 바꿨다.
+
+**변경 내용**:
+
+- `audit-engine/` → `audit_engine/` 디렉터리명 변경(`git mv`로 이력 보존).
+- [rag-agent/audit_hook.py](Ch03/d06/rag-agent/audit_hook.py): importlib `spec_from_file_location` 로딩 로직 제거,
+  `sys.path`에 d06 추가 후 `import audit_engine`으로 대체 — 코드 30줄 가량 삭제.
+- [scenarios/run_audit_scenarios.py](Ch03/d06/scenarios/run_audit_scenarios.py): 동일하게 단순화.
+- [audit_engine/__main__.py](Ch03/d06/audit_engine/__main__.py): base_dir 계산 로직 자체는 디렉터리 깊이 문제라
+  이름 변경과 무관하게 그대로 유지(주석만 갱신).
+
+**재검증**: 이름 변경 후 세 스크립트 전부 재실행 — [scenarios/run_audit_scenarios.py](Ch03/d06/scenarios/run_audit_scenarios.py)
+8개 시나리오 PASS, [scenarios/test_api_audit_flow.py](Ch03/d06/scenarios/test_api_audit_flow.py) PASS,
+`python3 -m py_compile`로 문법 확인. 그리고 처음엔 안 됐던 `python -m audit_engine <log_file>` CLI
+실행이 이제 정상 동작함을 직접 확인(`AuditEngineConfigLoader`/`AuditEngine`/`run_verification` 전부
+정상 로드, 리포트 저장까지 완료).
+
+### step-4 : rag-agent 및 audit_engine 통합 테스트 시나리오 (부분 실행 완료)
+
+앞서 완료한 "감사 시나리오 검증"은 `AuditEvent`를 직접 구성해 audit_engine 파이프라인만 단독 검증한
 것이다. step-4는 그 반대편 — 실제 `/rag`, `/agent` HTTP 호출(문서 임베딩·검색 경유)이 끝난 뒤
 `audit_hook.py`가 진짜로 raw events 파일에 기록을 남기고, 그 파일이 배치 검증을 통과하는지 확인하는
 end-to-end 테스트다.
@@ -258,7 +283,7 @@ end-to-end 테스트다.
   `result="failure"`로 정확히 1건씩 기록됨(요청당 raw_events.json 엔트리 +1, 유실/중복 없음) — PASS.
   이 과정에서 "구현 중 발견한 이슈" 1번(BackgroundTasks 예외 미실행 버그)을 실제로 잡아냈다.
 - 이렇게 쌓인 raw_events.json을 `AuditEngine.inspect()`에 통과 → hash_chain/masking/encryption/retention
-  4단계 전부 PASS — 실제 API 호출 산출물도 audit-engine 파이프라인과 호환됨을 확인.
+  4단계 전부 PASS — 실제 API 호출 산출물도 audit_engine 파이프라인과 호환됨을 확인.
 - `AuditEventClient` 동시 append 안전성: 스레드 30개로 직접 재현 → 유실/중복 없음 PASS
   (버그 발견 후 flush+fsync 수정 반영, "구현 중 발견한 이슈" 2번).
 

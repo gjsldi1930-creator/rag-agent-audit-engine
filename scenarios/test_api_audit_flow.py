@@ -1,9 +1,9 @@
 """
-[step-4] rag-agent + audit-engine 통합 테스트 (end-to-end).
+[step-4] rag-agent + audit_engine 통합 테스트 (end-to-end).
 
-"감사 시나리오 검증"(run_audit_scenarios.py)이 audit-engine을 단독으로 검증한 것과
+"감사 시나리오 검증"(run_audit_scenarios.py)이 audit_engine을 단독으로 검증한 것과
 달리, 이 스크립트는 실제 5-api.py의 /rag, /agent 엔드포인트를 호출해 audit_hook.py가
-진짜로 raw_events.json에 기록을 남기는지, 그리고 그 결과가 다시 audit-engine 파이프라인을
+진짜로 raw_events.json에 기록을 남기는지, 그리고 그 결과가 다시 audit_engine 파이프라인을
 통과하는지까지 확인한다.
 
 GEMINI_API_KEY 가 없는 환경에서는 LLM 호출 자체가 실패한다 — 이는 의도적으로 실패
@@ -102,7 +102,7 @@ def main() -> None:
     print(f"\n=> API 연동 감사 로그 테스트: {'PASS' if all_passed else 'FAIL'}")
 
     print("\n" + "=" * 78)
-    print(" 3) 실제 API 호출로 쌓인 raw_events.json 을 audit-engine 파이프라인으로 재검증")
+    print(" 3) 실제 API 호출로 쌓인 raw_events.json 을 audit_engine 파이프라인으로 재검증")
     print("=" * 78)
     audit_engine = sys.modules.get("audit_engine") or api.AUDIT_HOOK.AE
     config_path = D06_DIR / "configs" / "audit_engine_config.json"

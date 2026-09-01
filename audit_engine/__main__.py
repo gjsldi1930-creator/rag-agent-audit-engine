@@ -26,8 +26,8 @@ def main():
     parser.add_argument("--config", default=None, help="Audit Engine config 파일 경로")
     args = parser.parse_args()
 
-    # d06/audit-engine 은 원본(d05/src/audit_engine)과 달리 src/ 중간 계층이 없는
-    # 평탄화된 구조이므로 base_dir 은 audit-engine 의 부모(d06) 한 단계만 올라간다.
+    # d06/audit_engine 은 원본(d05/src/audit_engine)과 달리 src/ 중간 계층이 없는
+    # 평탄화된 구조이므로 base_dir 은 audit_engine 의 부모(d06) 한 단계만 올라간다.
     base_dir = Path(__file__).resolve().parent.parent
     config_path = args.config or str(base_dir / "configs" / "audit_engine_config.json")
 

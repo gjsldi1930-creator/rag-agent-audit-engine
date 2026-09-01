@@ -2,11 +2,8 @@
 [d06] RAG 에이전트 감사 시나리오 검증 러너
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 rag_audit_events.json 에 정의된 8개 시나리오(마스킹 4종, 실패 결과, 정책 미매핑/
-매핑 대조)를 audit-engine 파이프라인에 통과시키고, 기대값과 실측값을 대조한다.
+매핑 대조)를 audit_engine 파이프라인에 통과시키고, 기대값과 실측값을 대조한다.
 이어서 해시체인 결과 파일을 조작해 위변조 탐지 여부까지 확인한다.
-
-audit-engine 디렉터리명이 하이픈이라 `python -m audit_engine` / 일반 import 모두
-불가능하므로, rag-agent 쪽 모듈 로딩과 동일하게 importlib 경로 로딩을 사용한다.
 
 ■ 실행:
   python3 Ch03/d06/scenarios/run_audit_scenarios.py
@@ -15,7 +12,6 @@ audit-engine 디렉터리명이 하이픈이라 `python -m audit_engine` / 일�
 from __future__ import annotations
 
 import copy
-import importlib.util
 import json
 import sys
 from pathlib import Path
@@ -25,24 +21,9 @@ SCENARIO_FILE = Path(__file__).resolve().parent / "rag_audit_events.json"
 CONFIG_FILE = D06_DIR / "configs" / "audit_engine_config.json"
 TAMPERED_CHAIN_FILE = Path(__file__).resolve().parent / "tampered_chain.json"
 
-
-def load_audit_engine():
-    """audit-engine(하이픈) 디렉터리를 모듈명 audit_engine 으로 경로 로드한다."""
-    package_dir = D06_DIR / "audit-engine"
-    spec = importlib.util.spec_from_file_location(
-        "audit_engine",
-        package_dir / "__init__.py",
-        submodule_search_locations=[str(package_dir)],
-    )
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"audit-engine 을 로드할 수 없습니다: {package_dir}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["audit_engine"] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-AE = load_audit_engine()
+if str(D06_DIR) not in sys.path:
+    sys.path.insert(0, str(D06_DIR))
+import audit_engine as AE  # noqa: E402
 
 # 시나리오별 기대값: (record_id -> 검증 항목)
 EXPECTATIONS = {
