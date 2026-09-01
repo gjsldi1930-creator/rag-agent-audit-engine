@@ -4,28 +4,32 @@ RAG 시스템에 감사 엔진을 ADD-ON
 ## 파이프라인 개요
 
 흐름 A(요청 처리)는 동기, 흐름 B(감사 검증)는 비동기 배치로 분리한다 — 근거는 step-2 구조 결정 참조.
+흐름 A 안에서 감사 로깅이 API 계층이 아니라 RAG/Agent 함수 자신(SDK 계층) 안에 있다는 점이 이후
+"감사 로깅 SDK 통일 리팩터"에서 바뀐 부분이다 — 아래 다이어그램은 그 이후 최종 구조.
 
 ```mermaid
 flowchart TB
     Client([Client])
+    CLI(["CLI / 다른 스크립트\n(API 없이 직접 호출)"])
 
-    subgraph SyncFlow["흐름 A · 요청 처리 (동기, 5-api.py)"]
+    subgraph SyncFlow["흐름 A · 요청 처리 (동기)"]
         direction TB
-        API["POST /rag, /agent"]
-        LLMRoute["LLM Function Calling\n(4-agent.py, step-3)"]
-        ToolRag["tool_rag\n임베딩→검색→답변"]
-        ToolDirect["tool_direct_answer"]
-        ToolList["tool_list_documents"]
-        ToolSummary["tool_document_summary"]
-        Hook["audit_hook.py\nAuditEvent 구성"]
+        API["5-api.py: POST /rag, /agent\nset_context(헤더 → actor/source_ip)"]
+        LLMRoute["4-agent.py: LLM Function Calling\n(step-3, /agent 경로만 거침)"]
+        RunRag["3-2-rag.py: run_rag()\naction=rag_query"]
+        GenDirect["3-1-llm.py: generate_direct_answer()\naction=direct_answer"]
+        ToolList["tool_list_documents()\naction=list_documents"]
+        ToolSummary["tool_document_summary()\naction=document_summary"]
+        NoTool["도구 미호출\nrun_agent_with_trace()가 action=direct_llm_response 기록"]
         Resp([응답 반환])
     end
 
+    Hook["audit_hook.log_event()\n각 함수가 자기 결과를 스스로 기록.\ncontextvars(current_context())로\nactor/source_ip 자동 조회 —\n아무도 안 심었으면 기본 placeholder"]
     RawEvents[("raw_events.json\n(append-only)")]
 
     subgraph BatchFlow["흐름 B · 배치 검증 (비동기, cron)"]
         direction TB
-        Batch["배치 워커\nimportlib로 audit_engine 로드"]
+        Batch["python -m audit_engine &lt;raw_events.json&gt;"]
         Inspect["AuditEngine.inspect()"]
         FormatCheck{"이미 해시체인\n결과 포맷?"}
         Build["build_chain()\n신규 체인 생성 (항상 valid)"]
@@ -37,11 +41,13 @@ flowchart TB
         RunVerify["run_verification()\nhash/masking/encryption/retention 4단계 재검증"]
     end
 
-    Client --> API --> LLMRoute
-    LLMRoute --> ToolRag & ToolDirect & ToolList & ToolSummary
-    ToolRag & ToolDirect & ToolList & ToolSummary --> Resp --> Client
-    LLMRoute -. 도구 실행 결과 .-> Hook
-    Hook -->|append| RawEvents
+    Client --> API
+    API -->|/rag| RunRag
+    API -->|/agent| LLMRoute
+    CLI -. set_context 없이 직접 호출\n(기본 placeholder 컨텍스트) .-> RunRag
+    LLMRoute --> RunRag & GenDirect & ToolList & ToolSummary & NoTool
+    RunRag & GenDirect & ToolList & ToolSummary & NoTool --> Hook --> RawEvents
+    RunRag & GenDirect & ToolList & ToolSummary & NoTool --> Resp --> Client
 
     RawEvents --> Batch --> Inspect --> FormatCheck
     FormatCheck -->|No: raw events| Build
@@ -81,16 +87,17 @@ d06/audit_engine : Ch03/d05의 src/audit_engine
 
 **구성 요소**
 
-- [rag-agent/audit_hook.py](Ch03/d06/rag-agent/audit_hook.py) (구현 완료): `AuditEventClient` SDK 클라이언트 클래스.
-  audit_engine 디렉터리를 d06 아래의 정규 패키지(언더스코어 이름)로 두고 있어 `sys.path`에 d06을
-  추가한 뒤 `import audit_engine`으로 그냥 불러온다(아래 "audit_engine 패키지 통일" 참고 — 처음엔
-  하이픈 이름(`audit-engine`)이라 importlib 경로 로딩 워크어라운드가 필요했는데, 이후 언더스코어로
-  통일하며 제거했다). 라우트 코드에 append 로직이 직접 섞이지 않도록 `client.log(**fields)`
-  인터페이스로 분리 — 수집 지점(API 계층)과 로깅 구현을 독립시켰다.
-- [rag-agent/5-api.py](Ch03/d06/rag-agent/5-api.py) (구현 완료): `/rag`, `/agent`에 `X-Actor`/`X-Role`/`X-Department`
-  헤더 파라미터를 추가하고 `AuditEventClient`를 호출한다. 성공 응답은 `BackgroundTasks`로 기록해
-  요청 처리 자체가 감사 결과를 기다리지 않는다. **단, 실패(예외) 경로는 동기로 기록한다** — 아래
-  "구현 중 발견한 이슈" 참고.
+- [rag-agent/audit_hook.py](Ch03/d06/rag-agent/audit_hook.py) (구현 완료, 이후 "감사 로깅 SDK 통일
+  리팩터"에서 재작성됨): `AuditEventClient`(파일 append 전담) + `log_event()`(contextvars 기반
+  ambient 로깅 진입점) SDK. audit_engine 디렉터리를 d06 아래의 정규 패키지(언더스코어 이름)로 두고
+  있어 `sys.path`에 d06을 추가한 뒤 `import audit_engine`으로 그냥 불러온다(아래 "audit_engine
+  패키지 통일" 참고 — 처음엔 하이픈 이름(`audit-engine`)이라 importlib 경로 로딩 워크어라운드가
+  필요했는데, 이후 언더스코어로 통일하며 제거했다).
+- [rag-agent/5-api.py](Ch03/d06/rag-agent/5-api.py) (구현 완료, 이후 재작성됨): `/rag`, `/agent`에
+  `X-Actor`/`X-Role`/`X-Department` 헤더 파라미터를 받아 `audit_hook.set_context()`로 요청 컨텍스트만
+  심어준다. **실제 로깅 호출은 더 이상 여기 없다** — "감사 로깅 SDK 통일 리팩터" 이후 RAG/Agent 함수
+  자신이 스스로 기록한다. 이 문단의 "BackgroundTasks로 기록" 서술과 아래 "구현 중 발견한 이슈" 1번은
+  리팩터 이전 상태의 기록으로 남겨두되, 최종 구조는 그 아래 새 절 참고.
 - 배치 실행: `audit_engine/__main__.py`를 그대로 CLI로 쓴다 — `python -m audit_engine <log_file>`을
   cron/주기 작업으로 돌린다. (처음엔 디렉터리명이 하이픈이라 이 명령 자체가 불가능해서 importlib
   래퍼가 필요했었는데, "audit_engine 패키지 통일" 이후 표준 `-m` 실행이 그대로 된다 — 실제로
@@ -105,7 +112,7 @@ d06/audit_engine : Ch03/d05의 src/audit_engine
 | actor | `X-Actor` 헤더, 없으면 `"anonymous"` |
 | role | `X-Role` 헤더, 없으면 `"user"` |
 | department | `X-Department` 헤더, 없으면 `"unknown"` |
-| action | 도구명 매핑 (`tool_rag`→`rag_query`, `tool_direct_answer`→`direct_answer`, `tool_list_documents`→`list_documents`, `tool_document_summary`→`document_summary`) |
+| action | 각 함수가 자기 자신을 가리키는 literal 문자열로 직접 지정(`run_rag`→`rag_query`, `generate_direct_answer`→`direct_answer`, `tool_list_documents`→`list_documents`, `tool_document_summary`→`document_summary`, 도구 미호출→`direct_llm_response`) — 리팩터 이전엔 tool_name→action 매핑 함수(`map_action`)가 있었으나 로깅이 각 함수 내부로 옮겨가며 불필요해져 제거함 |
 | asset | `"rag-agent"` 고정 |
 | record_id | 요청별 UUID4 |
 | source_ip | `request.client.host` |
@@ -265,6 +272,60 @@ receiving updates or bug fixes. Please switch to the google.genai package as soo
 `python3 -m py_compile`로 문법 확인. 그리고 처음엔 안 됐던 `python -m audit_engine <log_file>` CLI
 실행이 이제 정상 동작함을 직접 확인(`AuditEngineConfigLoader`/`AuditEngine`/`run_verification` 전부
 정상 로드, 리포트 저장까지 완료).
+
+### 감사 로깅 SDK 통일 리팩터 (완료)
+
+**문제 제기**: step-2에서 "수집 지점 = API 계층"을 정한 근거(HTTP 요청 컨텍스트에 actor/source_ip가
+있다)는 여전히 맞다. 그런데 실제 코드는 그 근거를 "로깅 호출 자체를 5-api.py 라우트 안에 둔다"로
+구현해버렸다 — 그 결과 감사가 HTTP API를 거치는 경로에서만 동작했다(CLI로 `python3 4-agent.py`를
+직접 돌리면 감사가 전혀 안 남았다, step-2에 "CLI 경로는 감사 범위 밖"이라고 명시적으로 적어뒀던 그대로).
+에이전트 도구 선택은 진짜 외부 SDK(`google.generativeai`)를 쓰는데 감사 쪽만 API 라우트에 결합돼
+있는 게 비일관적이라는 지적을 받고, 로깅 호출 자체를 RAG/Agent 함수(SDK 계층) 안으로 옮겼다.
+
+**핵심 아이디어 — "수집 지점"과 "로깅 구현 위치"는 다른 결정이다.**
+"HTTP 컨텍스트가 필요하다"는 사실은 안 바뀐다. 다만 그 컨텍스트를 API 라우트가 직접 파일에 쓰는 데
+쓰지 않고, contextvars로 심어두기만 하면(`audit_hook.set_context()`), 몇 단계 아래에서 실행되는
+`run_rag()`/`generate_direct_answer()`/`tool_*()` 함수가 `audit_hook.log_event()`를 부를 때 자동으로
+그 컨텍스트를 읽어간다. API가 컨텍스트를 "제공"할 뿐, 로깅 자체는 SDK 계층 함수 자신의 책임이 된다.
+이건 OpenTelemetry/Sentry 같은 관측 SDK가 요청 컨텍스트를 전파하는 것과 같은 패턴이다.
+
+**변경 내용**:
+
+- [rag-agent/audit_hook.py](Ch03/d06/rag-agent/audit_hook.py): `AuditContext`(actor/role/department/source_ip)
+  dataclass + `contextvars.ContextVar` 추가. `set_context()`/`reset_context()`/`current_context()`로
+  컨텍스트 전파, `log_event(action, purpose, result)`로 현재 컨텍스트 기준 로깅. 이제 쓸모없어진
+  `ACTION_MAP`/`AuditEventClient.map_action()`은 삭제(각 함수가 자기 action 값을 literal로 직접 씀).
+- [rag-agent/3-2-rag.py](Ch03/d06/rag-agent/3-2-rag.py) `run_rag()`: 자기 실행 결과를 스스로
+  `action="rag_query"`로 기록(성공/실패 둘 다).
+- [rag-agent/3-1-llm.py](Ch03/d06/rag-agent/3-1-llm.py) `generate_direct_answer()`: 자기 실행 결과를
+  `action="direct_answer"`로 기록.
+- [rag-agent/4-agent.py](Ch03/d06/rag-agent/4-agent.py) `tool_list_documents()`/`tool_document_summary()`:
+  무인자 도구라 원 질문 문구를 모르므로 purpose는 "무엇을 했는지" 서술하는 고정 문자열
+  (`"문서 목록 조회"` 등)로 기록. `run_agent_with_trace()`는 두 경우만 자기 책임으로 기록한다 —
+  (1) 도구 선택이 시작되기도 전에 실패(`require_gemini()` 등) → `action="unknown"`,
+  (2) 도구가 하나도 호출되지 않음 → `action="direct_llm_response"`.
+  **도구가 실행된 경우는 여기서 기록하지 않는다** — 그 도구(또는 도구가 위임하는 run_rag/
+  generate_direct_answer)가 이미 자기 결과를 기록했으므로, 여기서 또 기록하면 요청 1건에 감사
+  이벤트 2건이 남는 중복 기록 버그가 된다(설계 단계에서 인지하고 피함 — "책임 분담" 주석으로
+  코드에도 남겨둠).
+- [rag-agent/5-api.py](Ch03/d06/rag-agent/5-api.py): `BackgroundTasks`/`log_audit_event()`/`AUDIT_CLIENT`
+  전부 제거. `/rag`, `/agent` 라우트는 이제 `audit_hook.set_context(...)` 로 컨텍스트만 심고
+  `finally`에서 `reset_context()` 할 뿐, 로깅 호출이 코드에 없다.
+  **부수 효과**: 이전 "구현 중 발견한 이슈" 1번(BackgroundTasks가 예외 경로에서 실행 안 되는 문제)이
+  원천적으로 사라졌다 — BackgroundTasks 자체를 안 쓰니 그 프레임워크 제약에 더 이상 노출되지 않는다.
+  대신 로깅이 항상 동기로 실행되는데, `AuditEventClient._append()`가 하는 일은 파일 락 + JSON append뿐
+  (해시체인 계산 같은 무거운 연산은 여전히 별도 배치의 몫)이라 지연 비용은 무시할 만하다는 판단.
+
+**행동 변화 (의도적)**: CLI에서 `python3 4-agent.py`나 `python3 3-2-rag.py`를 직접 실행해도 이제
+감사 로그가 남는다(actor="anonymous", source_ip="local" 같은 기본 placeholder로). step-2에서
+"CLI 경로는 감사 범위 밖"이라고 정했던 것의 정정이다 — SDK 계층에 로깅이 내장된 이상, 호출 경로가
+API든 CLI든 라이브러리를 쓰기만 하면 감사가 남는 게 자연스럽다.
+
+**재검증**: [scenarios/test_api_audit_flow.py](Ch03/d06/scenarios/test_api_audit_flow.py)에 4번째 섹션을
+추가해 "API를 전혀 거치지 않고 `run_rag()`를 직접 호출해도 감사가 남는지"를 실측 — `set_context()`를
+아무도 안 불렀는데도 `actor="anonymous"`, `source_ip="local"` 기본값으로 정확히 1건 기록됨을 확인(PASS).
+기존 1~3번 섹션(API 경유 흐름)도 재실행해 전부 PASS 유지 확인. 동시성 테스트(스레드 30개 동시
+`log_event()` 호출)도 새 구조로 재실행해 유실/중복 없음 재확인(PASS).
 
 ### step-4 : rag-agent 및 audit_engine 통합 테스트 시나리오 (부분 실행 완료)
 

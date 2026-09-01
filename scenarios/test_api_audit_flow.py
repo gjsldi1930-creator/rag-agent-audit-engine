@@ -104,7 +104,7 @@ def main() -> None:
     print("\n" + "=" * 78)
     print(" 3) 실제 API 호출로 쌓인 raw_events.json 을 audit_engine 파이프라인으로 재검증")
     print("=" * 78)
-    audit_engine = sys.modules.get("audit_engine") or api.AUDIT_HOOK.AE
+    audit_engine = sys.modules["audit_engine"]
     config_path = D06_DIR / "configs" / "audit_engine_config.json"
     config = audit_engine.AuditEngineConfigLoader.load_config(str(config_path))
     engine = audit_engine.AuditEngine(config, base_dir=str(D06_DIR))
@@ -114,6 +114,34 @@ def main() -> None:
     all_passed = all_passed and pipeline_ok
     for check in checks:
         print(f"  [{'PASS' if check.passed else 'FAIL'}] {check.stage:<10} {check.detail}")
+
+    print("\n" + "=" * 78)
+    print(" 4) API를 거치지 않은 직접 호출도 감사가 남는지 (SDK 통일 확인)")
+    print("=" * 78)
+    # 5-api.py 를 전혀 거치지 않고 3-2-rag.py 의 run_rag() 를 직접 호출한다.
+    # audit_hook.set_context() 를 아무도 부르지 않았으므로 AuditContext 기본값
+    # (actor="anonymous", source_ip="local") 이 쓰여야 한다 — API 계층이 없어도
+    # SDK(run_rag 내부)가 스스로 감사를 남긴다는 걸 보여주는 게 이 섹션의 목적이다.
+    rag_direct = importlib.util.spec_from_file_location("rag_direct_test", RAG_AGENT_DIR / "3-2-rag.py")
+    rag_module = importlib.util.module_from_spec(rag_direct)
+    sys.modules["rag_direct_test"] = rag_module  # dataclass의 __future__ annotations 해석에 필요
+    before = read_event_count()
+    try:
+        rag_direct.loader.exec_module(rag_module)
+        rag_module.run_rag("직접 호출 테스트 질문", top_k=1)
+    except BaseException:
+        pass  # GEMINI_API_KEY 없는 환경에서는 실패가 정상 — 로그가 남는지만 확인
+    after = read_event_count()
+    direct_call_ok = after == before + 1
+    if direct_call_ok:
+        last_event = json.loads(RAW_EVENTS_PATH.read_text(encoding="utf-8"))[-1]
+        context_ok = last_event["actor"] == "anonymous" and last_event["source_ip"] == "local"
+        direct_call_ok = direct_call_ok and context_ok
+        print(f"[{'PASS' if direct_call_ok else 'FAIL'}] run_rag() 직접 호출: raw_events 개수 {before}->{after}(기대 +1), "
+              f"actor={last_event['actor']}(기대 anonymous) source_ip={last_event['source_ip']}(기대 local)")
+    else:
+        print(f"[FAIL] run_rag() 직접 호출: raw_events 개수 {before}->{after}(기대 +1) — 로그가 안 남음")
+    all_passed = all_passed and direct_call_ok
 
     print(f"\n=> 전체 결과: {'PASS' if all_passed else 'FAIL'}")
     sys.exit(0 if all_passed else 1)

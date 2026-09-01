@@ -9,6 +9,12 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
+
+_THIS_DIR = Path(__file__).resolve().parent
+if str(_THIS_DIR) not in sys.path:
+    sys.path.insert(0, str(_THIS_DIR))
+import audit_hook  # noqa: E402
 
 # GEMINI_API_KEY 만 사용 (없으면 종료). 교육용으로 다른 프로바이더는 넣지 않음.
 API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
@@ -62,23 +68,32 @@ def generate_answer(genai, user_prompt: str) -> str:
 
 
 def generate_direct_answer(question: str) -> str:
-    """문서 검색 없이 질문만으로 일반 답변을 생성한다."""
-    genai = require_gemini()
-    model = genai.GenerativeModel(
-        model_name=CHAT_MODEL,
-        system_instruction=(
-            "당신은 간단한 학습용 에이전트입니다. "
-            "도구 결과가 없을 때는 한국어로 짧고 분명하게 답하세요."
-        ),
-    )
-    response = model.generate_content(
-        question,
-        generation_config={"temperature": 0.2},
-    )
-    text = getattr(response, "text", None)
-    if not text:
-        return f"[Gemini] 빈 응답: {response!r}"
-    return text.strip()
+    """문서 검색 없이 질문만으로 일반 답변을 생성한다.
+
+    이 함수가 호출 결과를 스스로 감사 로그에 남긴다(action="direct_answer") — 호출자가
+    HTTP API인지 CLI인지 몰라도 된다. actor/source_ip 등은 audit_hook.set_context()로
+    미리 심어둔 값을 쓰고, 아무도 심어두지 않았으면(CLI 등) 기본 placeholder를 쓴다.
+    """
+    try:
+        genai = require_gemini()
+        model = genai.GenerativeModel(
+            model_name=CHAT_MODEL,
+            system_instruction=(
+                "당신은 간단한 학습용 에이전트입니다. "
+                "도구 결과가 없을 때는 한국어로 짧고 분명하게 답하세요."
+            ),
+        )
+        response = model.generate_content(
+            question,
+            generation_config={"temperature": 0.2},
+        )
+        text = getattr(response, "text", None)
+        result = text.strip() if text else f"[Gemini] 빈 응답: {response!r}"
+    except BaseException:
+        audit_hook.log_event(action="direct_answer", purpose=question, result="failure")
+        raise
+    audit_hook.log_event(action="direct_answer", purpose=question, result="success")
+    return result
 
 if __name__ == "__main__":
     # 단독 테스트 실행

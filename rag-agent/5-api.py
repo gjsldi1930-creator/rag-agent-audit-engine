@@ -4,7 +4,7 @@ import importlib.util
 import sys
 from pathlib import Path
 
-from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -30,40 +30,14 @@ EMBEDDINGS = load_module("embeddings_api", "2-embeddings.py")
 sys.modules.setdefault("embeddings", EMBEDDINGS)
 RAG = load_module("rag_api", "3-2-rag.py")
 AGENT = load_module("agent_api", "4-agent.py")
-AUDIT_HOOK = load_module("audit_hook_api", "audit_hook.py")
 
-# [step-2] 감사 이벤트 수집 지점: API 계층. actor/source_ip 등 AuditEvent
-# 스키마 필드가 HTTP 요청 컨텍스트와 자연스럽게 매핑된다(plan.md 참고).
-RAW_EVENTS_PATH = BASE_DIR.parent / "outputs" / "raw_events" / "rag_agent_events.json"
-AUDIT_CLIENT = AUDIT_HOOK.AuditEventClient(RAW_EVENTS_PATH)
-
-
-def log_audit_event(
-    *,
-    actor: str | None,
-    role: str | None,
-    department: str | None,
-    action: str,
-    source_ip: str,
-    purpose: str,
-    result: str,
-) -> None:
-    """BackgroundTasks 에서 호출된다 — 응답을 이미 클라이언트에 보낸 뒤 실행되므로
-    여기서 예외가 나도 API 응답에는 영향을 주지 않는다(감사 엔진 SPOF 제거)."""
-    try:
-        AUDIT_CLIENT.log(
-            actor=actor or "anonymous",
-            role=role or "user",
-            department=department or "unknown",
-            action=action,
-            asset="rag-agent",
-            source_ip=source_ip,
-            purpose=purpose,
-            result=result,
-        )
-    except Exception as exc:
-        print(f"[audit] 로그 기록 실패: {exc}", file=sys.stderr, flush=True)
-
+# audit_hook 은 번호 없는 정상 파일명이라 일반 import로 충분하다. RAG/AGENT가 내부에서
+# 이미 각자 import audit_hook 을 했으므로 sys.modules에 캐시된 동일 인스턴스를 그대로 쓴다
+# (import는 멱등 — 매번 새로 실행되지 않고 캐시를 재사용한다). 감사 로깅 자체는 이제
+# RAG/AGENT 내부(SDK 계층)에서 스스로 수행한다 — 여기서는 "누가/어디서" 컨텍스트만 심어준다.
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+import audit_hook  # noqa: E402
 
 # FastAPI 앱: 지금까지 만든 문서/임베딩/RAG/Agent 기능을
 # HTTP 요청으로 호출할 수 있게 감싸는 서비스 진입점이다.
@@ -89,6 +63,20 @@ def translate_error(exc: BaseException) -> HTTPException:
     if isinstance(exc, SystemExit):
         return HTTPException(status_code=500, detail="Gemini 설정 또는 실행 중 종료가 발생했습니다.")
     return HTTPException(status_code=500, detail=str(exc))
+
+
+def _build_audit_context(
+    request: Request,
+    x_actor: str | None,
+    x_role: str | None,
+    x_department: str | None,
+) -> audit_hook.AuditContext:
+    return audit_hook.AuditContext(
+        actor=x_actor or "anonymous",
+        role=x_role or "user",
+        department=x_department or "unknown",
+        source_ip=request.client.host if request.client else "unknown",
+    )
 
 
 @app.get("/health")
@@ -124,29 +112,20 @@ def get_tools() -> dict[str, object]:
 def rag_answer(
     payload: RagRequest,
     request: Request,
-    background_tasks: BackgroundTasks,
     x_actor: str | None = Header(None, alias="X-Actor"),
     x_role: str | None = Header(None, alias="X-Role"),
     x_department: str | None = Header(None, alias="X-Department"),
 ) -> dict[str, object]:
-    # 3-rag.py 의 run_rag() 를 HTTP 엔드포인트로 감싼다.
-    audit_kwargs = dict(
-        actor=x_actor,
-        role=x_role,
-        department=x_department,
-        action=AUDIT_HOOK.AuditEventClient.map_action("tool_rag"),
-        source_ip=request.client.host if request.client else "unknown",
-        purpose=payload.question,
-    )
+    # 3-2-rag.py 의 run_rag() 를 HTTP 엔드포인트로 감싼다.
+    # 감사 로깅은 run_rag() 내부(SDK 계층)에서 스스로 수행한다 — 여기서는 이 요청의
+    # actor/source_ip 컨텍스트만 심어주고, 실제 기록 여부/시점은 run_rag()가 결정한다.
+    token = audit_hook.set_context(_build_audit_context(request, x_actor, x_role, x_department))
     try:
         answer = RAG.run_rag(payload.question, top_k=payload.top_k)
     except BaseException as exc:
-        # 실패 응답은 FastAPI 예외 핸들러가 별도 Response를 생성하므로 여기서 등록한
-        # BackgroundTasks는 실행되지 않는다(프레임워크 제약) — 실패 경로만 동기로 기록한다.
-        log_audit_event(**audit_kwargs, result="failure")
         raise translate_error(exc) from exc
-
-    background_tasks.add_task(log_audit_event, **audit_kwargs, result="success")
+    finally:
+        audit_hook.reset_context(token)
     return {
         "mode": "rag",
         "question": payload.question,
@@ -159,41 +138,20 @@ def rag_answer(
 def agent_answer(
     payload: QuestionRequest,
     request: Request,
-    background_tasks: BackgroundTasks,
     x_actor: str | None = Header(None, alias="X-Actor"),
     x_role: str | None = Header(None, alias="X-Role"),
     x_department: str | None = Header(None, alias="X-Department"),
 ) -> dict[str, object]:
     # 4-agent.py 의 run_agent_with_trace() 를 호출한다.
-    # 단순 답변뿐 아니라 어떤 도구를 골랐는지도 함께 반환한다.
-    tool_name = "unknown"
+    # 감사 로깅은 실행된 도구(또는 도구 미실행 시 run_agent_with_trace 자신)가
+    # SDK 계층에서 스스로 수행한다 — 여기서는 컨텍스트만 심어준다.
+    token = audit_hook.set_context(_build_audit_context(request, x_actor, x_role, x_department))
     try:
         trace = AGENT.run_agent_with_trace(payload.question)
-        tool_name = trace["tool_name"]
     except BaseException as exc:
-        # 실패 응답은 FastAPI 예외 핸들러가 별도 Response를 생성하므로 여기서 등록한
-        # BackgroundTasks는 실행되지 않는다(프레임워크 제약) — 실패 경로만 동기로 기록한다.
-        log_audit_event(
-            actor=x_actor,
-            role=x_role,
-            department=x_department,
-            action=AUDIT_HOOK.AuditEventClient.map_action(tool_name),
-            source_ip=request.client.host if request.client else "unknown",
-            purpose=payload.question,
-            result="failure",
-        )
         raise translate_error(exc) from exc
-
-    background_tasks.add_task(
-        log_audit_event,
-        actor=x_actor,
-        role=x_role,
-        department=x_department,
-        action=AUDIT_HOOK.AuditEventClient.map_action(tool_name),
-        source_ip=request.client.host if request.client else "unknown",
-        purpose=payload.question,
-        result="success",
-    )
+    finally:
+        audit_hook.reset_context(token)
     return {"mode": "agent", **trace}
 
 

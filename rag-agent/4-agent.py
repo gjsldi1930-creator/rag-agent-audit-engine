@@ -30,6 +30,11 @@ LLM = load_module("llm_demo", "3-1-llm.py")
 sys.modules.setdefault("llm", LLM)
 RAG = load_module("rag_demo", "3-2-rag.py")
 
+_THIS_DIR = Path(__file__).resolve().parent
+if str(_THIS_DIR) not in sys.path:
+    sys.path.insert(0, str(_THIS_DIR))
+import audit_hook  # noqa: E402
+
 
 def tool_list_documents() -> str:
     """문서 목록을 조회한다.
@@ -37,11 +42,19 @@ def tool_list_documents() -> str:
     사용자가 "어떤 문서가 있는지", "문서 목록 보여줘"처럼 보유 문서 자체를
     확인하고 싶어할 때 이 도구를 사용한다.
     """
-    docs = DOCUMENTS.load_documents()
-    lines = ["[도구] 문서 목록 조회"]
-    for doc in docs:
-        lines.append(f"- {doc.doc_id}: {doc.text}")
-    return "\n".join(lines)
+    # 이 도구는 LLM이 인자 없이 호출하므로 사용자의 원래 질문 문구를 모른다 —
+    # purpose는 "무엇을 했는지"를 정확히 서술하는 고정 문자열로 남긴다.
+    try:
+        docs = DOCUMENTS.load_documents()
+        lines = ["[도구] 문서 목록 조회"]
+        for doc in docs:
+            lines.append(f"- {doc.doc_id}: {doc.text}")
+        result = "\n".join(lines)
+    except BaseException:
+        audit_hook.log_event(action="list_documents", purpose="문서 목록 조회", result="failure")
+        raise
+    audit_hook.log_event(action="list_documents", purpose="문서 목록 조회", result="success")
+    return result
 
 
 def tool_document_summary() -> str:
@@ -50,11 +63,17 @@ def tool_document_summary() -> str:
     사용자가 "문서가 몇 개인지", "어떤 종류의 문서가 있는지"처럼 개요만
     궁금해할 때 이 도구를 사용한다.
     """
-    docs = DOCUMENTS.load_documents()
-    lines = ["[도구] 문서 구성 요약"]
-    lines.append(f"- 문서 수: {len(docs)}")
-    lines.append(f"- 문서 id: {', '.join(doc.doc_id for doc in docs)}")
-    return "\n".join(lines)
+    try:
+        docs = DOCUMENTS.load_documents()
+        lines = ["[도구] 문서 구성 요약"]
+        lines.append(f"- 문서 수: {len(docs)}")
+        lines.append(f"- 문서 id: {', '.join(doc.doc_id for doc in docs)}")
+        result = "\n".join(lines)
+    except BaseException:
+        audit_hook.log_event(action="document_summary", purpose="문서 구성 요약", result="failure")
+        raise
+    audit_hook.log_event(action="document_summary", purpose="문서 구성 요약", result="success")
+    return result
 
 
 def tool_rag(question: str) -> str:
@@ -130,21 +149,36 @@ def _extract_tool_name(chat) -> str:
 
 
 def run_agent_with_trace(question: str) -> dict[str, str]:
-    """질문을 받아 LLM이 직접 도구를 고르게 하고, 선택 결과와 최종 응답을 반환한다."""
+    """질문을 받아 LLM이 직접 도구를 고르게 하고, 선택 결과와 최종 응답을 반환한다.
+
+    감사 로깅 책임 분담(중복 기록 방지):
+    - 도구가 실제로 실행됐으면(tool_rag/tool_direct_answer/tool_list_documents/
+      tool_document_summary) 그 도구(또는 그 도구가 위임하는 run_rag/
+      generate_direct_answer)가 이미 자기 결과를 기록했다 — 여기서 또 기록하지 않는다.
+    - 도구가 하나도 호출되지 않았으면(direct_llm_response) 아무도 기록한 적이
+      없으므로 여기서 기록한다.
+    - 도구 선택 자체가 시작되기도 전에 실패하면(예: API 키 없음) 역시 아무도
+      기록한 적이 없으므로 여기서 action="unknown"으로 기록한다.
+    """
     print("=" * 60, flush=True)
     print("Agent 데모 (LLM Function Calling)", flush=True)
     print("=" * 60, flush=True)
     print(f"[입력] {question}", flush=True)
 
-    genai = require_gemini()
-    model = genai.GenerativeModel(
-        model_name=LLM.CHAT_MODEL,
-        system_instruction=SYSTEM_INSTRUCTION,
-        tools=TOOLS,
-    )
-    chat = model.start_chat(enable_automatic_function_calling=True)
+    try:
+        genai = require_gemini()
+        model = genai.GenerativeModel(
+            model_name=LLM.CHAT_MODEL,
+            system_instruction=SYSTEM_INSTRUCTION,
+            tools=TOOLS,
+        )
+        chat = model.start_chat(enable_automatic_function_calling=True)
+    except BaseException:
+        audit_hook.log_event(action="unknown", purpose=question, result="failure")
+        raise
 
     print("[계획] 규칙 기반 분기 없이 LLM이 도구 설명을 보고 직접 선택합니다.", flush=True)
+    # chat.send_message() 내부에서 도구가 실행되면 그 도구가 자기 결과를 스스로 기록한다.
     response = chat.send_message(question)
     tool_name = _extract_tool_name(chat)
     print(f"  - 선택 도구: {tool_name}", flush=True)
@@ -152,6 +186,10 @@ def run_agent_with_trace(question: str) -> dict[str, str]:
     print("[관찰] 도구 실행 결과가 반영된 최종 응답을 받았습니다.", flush=True)
     text = getattr(response, "text", None)
     result = text.strip() if text else f"[Gemini] 빈 응답: {response!r}"
+
+    if tool_name == "direct_llm_response":
+        # 어떤 도구도 실행되지 않았다 -> 하위에서 아무도 기록하지 않았으므로 여기서 기록.
+        audit_hook.log_event(action="direct_llm_response", purpose=question, result="success")
 
     return {
         "question": question,

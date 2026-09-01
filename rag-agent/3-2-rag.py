@@ -31,6 +31,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Sequence, Tuple
 
+_THIS_DIR = Path(__file__).resolve().parent
+if str(_THIS_DIR) not in sys.path:
+    sys.path.insert(0, str(_THIS_DIR))
+import audit_hook  # noqa: E402
+
 try:
     from documents import Document, load_documents
 except ModuleNotFoundError:
@@ -160,18 +165,29 @@ Question: {question}
 
 
 def run_rag(question: str, top_k: int = 2) -> str:
-    """Document → Embed → Vector DB → search → Prompt → LLM → 답변"""
-    documents = load_documents()
-    print("[1] Document 로드", flush=True)
-    for doc in documents:
-        print(f"  - document {doc.doc_id!r}: {doc.text}", flush=True)
+    """Document → Embed → Vector DB → search → Prompt → LLM → 답변
 
-    genai = require_gemini()
-    db = build_index(genai, documents)
-    hits = search(genai, db, question, top_k=top_k)
-    contexts = [doc for doc, _score in hits]
-    prompt = build_prompt(question, contexts)
-    return generate_answer(genai, prompt)
+    이 함수가 호출 결과를 스스로 감사 로그에 남긴다(action="rag_query") — /rag 엔드포인트가
+    직접 부르든, 에이전트가 tool_rag를 통해 부르든, CLI(main())로 직접 실행하든 동일하게
+    기록된다. actor/source_ip 등은 audit_hook.set_context()로 미리 심어둔 값을 쓴다.
+    """
+    try:
+        documents = load_documents()
+        print("[1] Document 로드", flush=True)
+        for doc in documents:
+            print(f"  - document {doc.doc_id!r}: {doc.text}", flush=True)
+
+        genai = require_gemini()
+        db = build_index(genai, documents)
+        hits = search(genai, db, question, top_k=top_k)
+        contexts = [doc for doc, _score in hits]
+        prompt = build_prompt(question, contexts)
+        answer = generate_answer(genai, prompt)
+    except BaseException:
+        audit_hook.log_event(action="rag_query", purpose=question, result="failure")
+        raise
+    audit_hook.log_event(action="rag_query", purpose=question, result="success")
+    return answer
 
 
 def main() -> None:
