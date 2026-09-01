@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+
+# audit-engine 실행/테스트 산출물 (재생성 가능, key_vault.json에 DEK 키 포함이라 제외)
+outputs/
+scenarios/tampered_chain.json

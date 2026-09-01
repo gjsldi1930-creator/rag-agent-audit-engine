@@ -1,0 +1,110 @@
+[
+    {
+        "timestamp": "2026-08-31T05:05:45Z",
+        "actor": "sec_admin_mike",
+        "role": "security_admin",
+        "department": "platform-security",
+        "action": "auth_login",
+        "asset": "auth_service",
+        "record_id": "attempt-001",
+        "source_ip": "10.20.0.1",
+        "purpose": "routine-user-login",
+        "result": "success"
+    },
+    {
+        "timestamp": "2026-08-31T05:05:45Z",
+        "actor": "",
+        "role": "unknown",
+        "department": "unknown",
+        "action": "delete_audit_logs",
+        "asset": "audit_storage_db",
+        "record_id": "log-del-901",
+        "source_ip": "10.20.0.2",
+        "purpose": "untracked_operation",
+        "result": "vulnerability_missing_actor"
+    },
+    {
+        "timestamp": "2026-08-31T05:05:45Z",
+        "actor": "UNKNOWN_ANONYMOUS",
+        "role": "unassigned",
+        "department": "untracked",
+        "action": "export_pii",
+        "asset": "customer_vault_db",
+        "record_id": "pii_req_9901",
+        "source_ip": "10.20.0.3",
+        "purpose": "주민등록번호: 900101-1234567, 카드번호: 1234-5678-9012-3456 노출",
+        "result": "vulnerability_unmasked_plain_pii"
+    },
+    {
+        "timestamp": "2026-08-31T05:05:45Z",
+        "actor": "sre_oncall_david",
+        "role": "sre_engineer",
+        "department": "reliability",
+        "action": "tampered_grant_role",
+        "asset": "iam_policy",
+        "record_id": "tampered-rec-771",
+        "source_ip": "10.20.0.4",
+        "purpose": "unauthorized-privilege-injection",
+        "result": "vulnerability_hash_chain_tampered"
+    },
+    {
+        "timestamp": "2026-08-31T05:05:45Z",
+        "actor": "sec_admin_mike",
+        "role": "security_admin",
+        "department": "platform-security",
+        "action": "grant_role",
+        "asset": "iam_policy",
+        "record_id": "user_102:auditor_role",
+        "source_ip": "10.20.0.5",
+        "purpose": "quarterly-audit",
+        "result": "success"
+    },
+    {
+        "timestamp": "2026-08-31T05:05:45Z",
+        "actor": "compliance_auditor_sarah",
+        "role": "compliance_officer",
+        "department": "legal",
+        "action": "system_config_change",
+        "asset": "firewall_rule",
+        "record_id": "rule-update-001",
+        "source_ip": "10.20.0.6",
+        "purpose": "malformed_timestamp_testing",
+        "result": "vulnerability_malformed_timestamp"
+    },
+    {
+        "timestamp": "2026-08-31T05:05:45Z",
+        "actor": "UNKNOWN_ANONYMOUS",
+        "role": "unassigned",
+        "department": "untracked",
+        "action": "break_glass_access",
+        "asset": "prod_primary_db",
+        "record_id": "incident-tik-7710",
+        "source_ip": "10.20.0.7",
+        "purpose": "p0-outage-emergency-recovery",
+        "result": "success_session_recorded"
+    },
+    {
+        "timestamp": "2026-08-31T05:05:45Z",
+        "actor": "sre_oncall_david",
+        "role": "sre_engineer",
+        "department": "reliability",
+        "action": "expired_pii_access",
+        "asset": "user_archive_log",
+        "record_id": "expired-pii-8802",
+        "source_ip": "10.20.0.8",
+        "purpose": "unshredded_key_data_exposure",
+        "result": "vulnerability_unshredded_key_remanence"
+    },
+    {
+        "timestamp": "2026-08-31T05:05:45Z",
+        "actor": "sec_admin_mike",
+        "role": "security_admin",
+        "department": "platform-security",
+        "action": "update_guardrail",
+        "asset": "prompt_filter_config",
+        "record_id": "policy-v3.5",
+        "source_ip": "10.20.0.9",
+        "purpose": "strengthen-prompt-injection-filter",
+        "result": "success"
+    }
+]

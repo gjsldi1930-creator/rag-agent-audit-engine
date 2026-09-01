@@ -1,0 +1,69 @@
+{
+  "_comment": "Audit Engine 통합 Config: 해시체인 + 보관정책 + 암호화 규칙을 하나로 통합한 설정 파일. 기존 lab10_step0*.py의 개별 config(lab10_hash_chain_config.json 등)와는 독립적으로 관리한다.",
+  "_how_to_use": {
+    "1_실행_명령": "cd Ch03/d05/src && python -m audit_engine <log_file_path>",
+    "2_해시_알고리즘_변경": "hash_chain_rules.hash_algorithm 값을 'sha256', 'sha512', 'sha3_256' 중 선택",
+    "3_보관_정책_수정": "retention_policy.policies 항목에서 action별 보관 일수/법적 근거 통제",
+    "4_암호화_대상_필드_변경": "crypto_rules.target_pii_fields 배열 수정"
+  },
+  "hash_chain_rules": {
+    "hash_algorithm": "sha256",
+    "genesis_previous_hash": "GENESIS"
+  },
+  "retention_policy": {
+    "default_policy": {
+      "retention_days": 365,
+      "category": "일반 감사 로그 (1년)",
+      "legal_basis": "일반 내부 보안 정책"
+    },
+    "policies": {
+      "auth_login": {
+        "retention_days": 365,
+        "category": "인증/접근 로그 (1년)",
+        "legal_basis": "개인정보보호법 / ISMS-P 인증 기준"
+      },
+      "update_guardrail": {
+        "retention_days": 365,
+        "category": "보안 정책 변경 로그 (1년)",
+        "legal_basis": "내부 정보보호 통제 지침"
+      },
+      "export_pii": {
+        "retention_days": 730,
+        "category": "개인정보 추출 로그 (2년)",
+        "legal_basis": "개인정보보호법 시행령 제31조"
+      },
+      "grant_role": {
+        "retention_days": 1095,
+        "category": "권한 변경 로그 (3년)",
+        "legal_basis": "정보보호 관리체계 안전성 확보 조치"
+      },
+      "bulk_download": {
+        "retention_days": 1095,
+        "category": "이상 패턴 로그 (3년)",
+        "legal_basis": "침해 사고 포렌식 및 사후 조사"
+      },
+      "break_glass_access": {
+        "retention_days": 1825,
+        "category": "비상 관리자 접근 로그 (5년)",
+        "legal_basis": "전자금융거래법 / SOC 2 Type II"
+      },
+      "delete_audit_logs": {
+        "retention_days": 1825,
+        "category": "로그 삭제 침해 로그 (5년)",
+        "legal_basis": "형법 업무방해 / 보안 감사 규정"
+      }
+    }
+  },
+  "crypto_rules": {
+    "algorithm": "sha256-keystream-xor",
+    "key_size_bits": 256,
+    "target_pii_fields": [
+      "actor",
+      "purpose"
+    ]
+  },
+  "output_settings": {
+    "report_dir": "outputs/audit_engine",
+    "key_vault_path": "outputs/audit_engine/key_vault.json"
+  }
+}

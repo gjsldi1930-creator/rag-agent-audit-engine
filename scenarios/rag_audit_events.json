@@ -1,0 +1,98 @@
+[
+  {
+    "timestamp": "2026-09-01T09:00:00Z",
+    "actor": "user_kim",
+    "role": "user",
+    "department": "cs-support",
+    "action": "rag_query",
+    "asset": "rag-agent",
+    "record_id": "rag-001",
+    "source_ip": "192.168.10.15",
+    "purpose": "주말에도 지원팀 연락이 가능한지 문의",
+    "result": "success"
+  },
+  {
+    "timestamp": "2026-09-01T09:01:00Z",
+    "actor": "user_lee",
+    "role": "user",
+    "department": "cs-support",
+    "action": "rag_query",
+    "asset": "rag-agent",
+    "record_id": "rag-002",
+    "source_ip": "192.168.10.16",
+    "purpose": "환불 문의드립니다. 회신은 min.lee@example.com 으로 부탁드려요",
+    "result": "success"
+  },
+  {
+    "timestamp": "2026-09-01T09:02:00Z",
+    "actor": "user_park",
+    "role": "user",
+    "department": "cs-support",
+    "action": "direct_answer",
+    "asset": "rag-agent",
+    "record_id": "rag-003",
+    "source_ip": "192.168.10.17",
+    "purpose": "010-4321-9876 으로 연락 주시면 확인 후 답변드리겠습니다",
+    "result": "success"
+  },
+  {
+    "timestamp": "2026-09-01T09:03:00Z",
+    "actor": "user_min",
+    "role": "user",
+    "department": "cs-support",
+    "action": "list_documents",
+    "asset": "rag-agent",
+    "record_id": "rag-004",
+    "source_ip": "192.168.10.18",
+    "purpose": "저는 김민수 고객입니다. 문서 목록 보여주세요",
+    "result": "success"
+  },
+  {
+    "timestamp": "2026-09-01T09:04:00Z",
+    "actor": "user_choi",
+    "role": "user",
+    "department": "cs-support",
+    "action": "document_summary",
+    "asset": "rag-agent",
+    "record_id": "rag-005",
+    "source_ip": "192.168.10.19",
+    "purpose": "카드번호 1234-5678-9012-3456으로 결제된 내역 확인 부탁드립니다",
+    "result": "success"
+  },
+  {
+    "timestamp": "2026-09-01T09:05:00Z",
+    "actor": "user_jung",
+    "role": "user",
+    "department": "cs-support",
+    "action": "rag_query",
+    "asset": "rag-agent",
+    "record_id": "rag-006",
+    "source_ip": "192.168.10.20",
+    "purpose": "존재하지 않는 정책 문서 조회 실패",
+    "result": "failure"
+  },
+  {
+    "timestamp": "2026-09-01T09:06:00Z",
+    "actor": "data_admin_park",
+    "role": "data_admin",
+    "department": "privacy-office",
+    "action": "export_pii",
+    "asset": "rag-agent-logs",
+    "record_id": "rag-007",
+    "source_ip": "172.16.0.5",
+    "purpose": "고객 데이터 백업 목적 추출",
+    "result": "success"
+  },
+  {
+    "timestamp": "2026-09-01T09:07:00Z",
+    "actor": "user_seo",
+    "role": "user",
+    "department": "cs-support",
+    "action": "direct_llm_response",
+    "asset": "rag-agent",
+    "record_id": "rag-008",
+    "source_ip": "192.168.10.21",
+    "purpose": "파이썬은 어떤 언어야?",
+    "result": "success"
+  }
+]
