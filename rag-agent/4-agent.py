@@ -151,7 +151,7 @@ def _extract_tool_name(chat) -> str:
 def run_agent_with_trace(question: str) -> dict[str, str]:
     """질문을 받아 LLM이 직접 도구를 고르게 하고, 선택 결과와 최종 응답을 반환한다.
 
-    감사 로깅 책임 분담(중복 기록 방지):
+    감사 로깅 책임 분담(중복 기록 방지, 3가지 경우):
     - 도구가 실제로 실행됐으면(tool_rag/tool_direct_answer/tool_list_documents/
       tool_document_summary) 그 도구(또는 그 도구가 위임하는 run_rag/
       generate_direct_answer)가 이미 자기 결과를 기록했다 — 여기서 또 기록하지 않는다.
@@ -159,6 +159,13 @@ def run_agent_with_trace(question: str) -> dict[str, str]:
       없으므로 여기서 기록한다.
     - 도구 선택 자체가 시작되기도 전에 실패하면(예: API 키 없음) 역시 아무도
       기록한 적이 없으므로 여기서 action="unknown"으로 기록한다.
+
+    실제 API 키로 테스트하다 발견한 4번째 경우: chat.send_message() 자체가 도구를
+    한 번도 호출하지 못한 채(예: 첫 모델 응답 자체가 429 쿼터 초과) 실패하면, 어떤
+    도구도 log_event()를 부른 적이 없어 통째로 감사 공백이 생긴다. 이건 "도구 실행 중
+    실패"와 구분해야 하므로(안 그러면 도구가 이미 기록한 걸 여기서 또 기록해 중복이
+    생김) audit_hook.begin_tracking()/was_logged()로 "누군가 이미 기록했는지"를
+    추적해 필요할 때만 폴백 기록한다.
     """
     print("=" * 60, flush=True)
     print("Agent 데모 (LLM Function Calling)", flush=True)
@@ -179,7 +186,16 @@ def run_agent_with_trace(question: str) -> dict[str, str]:
 
     print("[계획] 규칙 기반 분기 없이 LLM이 도구 설명을 보고 직접 선택합니다.", flush=True)
     # chat.send_message() 내부에서 도구가 실행되면 그 도구가 자기 결과를 스스로 기록한다.
-    response = chat.send_message(question)
+    # 도구가 실행되지 못한 채 이 호출 자체가 실패하면 누구도 기록하지 않으므로 폴백이 필요하다.
+    track_token = audit_hook.begin_tracking()
+    try:
+        response = chat.send_message(question)
+    except BaseException:
+        if not audit_hook.was_logged():
+            audit_hook.log_event(action="unknown", purpose=question, result="failure")
+        raise
+    finally:
+        audit_hook.end_tracking(track_token)
     tool_name = _extract_tool_name(chat)
     print(f"  - 선택 도구: {tool_name}", flush=True)
 

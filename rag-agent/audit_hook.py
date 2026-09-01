@@ -72,6 +72,30 @@ def current_context() -> AuditContext:
     return _current_context.get()
 
 
+# run_agent_with_trace() 처럼 "하위 호출(도구)이 이미 감사를 기록했는지" 알아야
+# 중복 기록 없이 폴백 로깅을 할 수 있는 지점을 위한 추적 플래그.
+# (예: chat.send_message() 자체가 도구 실행 전에 실패하면 아무 도구도 log_event()를
+#  안 불렀을 테니 폴백이 기록해야 하고, 도구가 실행되다 실패했으면 그 도구가 이미
+#  기록했을 테니 폴백은 기록하지 않아야 한다.)
+_event_logged: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
+    "audit_hook_event_logged", default=False
+)
+
+
+def begin_tracking():
+    """이 시점 이후 log_event() 호출 여부 추적을 시작한다. 반환값을 end_tracking()에 넘겨 복원."""
+    return _event_logged.set(False)
+
+
+def end_tracking(token) -> None:
+    _event_logged.reset(token)
+
+
+def was_logged() -> bool:
+    """begin_tracking() 이후 log_event()가 (성공/실패 결과와 무관하게) 호출된 적 있는지."""
+    return _event_logged.get()
+
+
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -154,6 +178,7 @@ def log_event(*, action: str, purpose: str, result: str, asset: str = "rag-agent
     안 된다는 원칙(plan.md step-2 구조 결정 1번)이 여기서도 적용된다.
     """
     ctx = current_context()
+    _event_logged.set(True)  # 기록 시도 자체를 표시 (파일 쓰기 성공 여부와 무관)
     try:
         _get_default_client().log(
             actor=ctx.actor,

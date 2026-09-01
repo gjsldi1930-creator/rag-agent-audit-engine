@@ -238,15 +238,15 @@ receiving updates or bug fixes. Please switch to the google.genai package as soo
 설계 단계에서 받아들이기로 한 트레이드오프(위 리스크/트레이드오프 항목)와 별개로, 실제 구현 전까지는
 아직 결정하지 않은 것들:
 
-- **GEMINI_API_KEY 의존성 (실증됨)**: 실제로 API 키 없이 `/agent`를 호출해보니 도구 선택 단계
-  (`require_gemini()`)에서 바로 `SystemExit`로 막힌다 — 예상대로 어떤 경로도 API 키 없이는
-  성공 테스트가 불가능하다. 이번 검증은 이 SystemExit → 500 실패 경로가 감사 로그에 올바르게
-  남는지까지만 확인했고, 실제 답변 생성(성공 경로)은 이 환경에 API 키가 없어 검증하지 못했다 —
-  **미검증 상태로 명시**.
+- ~~**GEMINI_API_KEY 의존성**: 성공 경로(실제 답변 생성) 미검증.~~ → **해소**. 실 API 키로 재검증
+  완료 — step-4 "실 API 키로 성공 경로 검증" 참고. `/rag` 완전 성공, `/agent` 도구 선택 4종 정확,
+  그 과정에서 새 버그(도구 미실행 상태의 send_message 실패가 감사 공백을 만드는 문제)를 찾아 고쳤다.
 - automatic function calling 실패 시 폴백 부재: SDK가 함수 호출에 실패(인자 누락/오류)했을 때
   재시도 없이 바로 예외로 전파할지, 아니면 `tool_direct_answer`로 폴백할지 미정. (여전히 미결정)
 - 회귀 테스트 불가능 영역: "질문 X는 반드시 도구 Y를 쓴다"는 assert가 비결정적 모델 출력 때문에
-  깨지기 쉬움 — step-4에서도 실제 도구 선택 정확도는 검증하지 못했다(API 키 없음). (여전히 미결정)
+  깨지기 쉬움 — 실제로 동일 질문("비행기 표 환불 규정 알려줘")을 재시도했을 때 한 번은 SDK 레벨
+  오류로 실패, 한 번은 성공한 사례를 실측했다(step-4 참고) — 비결정성이 이론이 아니라 실측된
+  리스크임을 확인. (여전히 미결정)
 - `google.generativeai` 지원 종료(위 "중요 발견" 참고) — 언제 `google-genai`로 옮길지는 별도 결정.
 
 ### audit_engine 패키지 통일 (완료)
@@ -327,7 +327,12 @@ API든 CLI든 라이브러리를 쓰기만 하면 감사가 남는 게 자연스
 기존 1~3번 섹션(API 경유 흐름)도 재실행해 전부 PASS 유지 확인. 동시성 테스트(스레드 30개 동시
 `log_event()` 호출)도 새 구조로 재실행해 유실/중복 없음 재확인(PASS).
 
-### step-4 : rag-agent 및 audit_engine 통합 테스트 시나리오 (부분 실행 완료)
+**후속 수정**: 이 리팩터 직후엔 "도구가 실행되면 도구가, 안 됐으면 run_agent_with_trace가" 두 갈래로
+책임을 나눴는데, 실 API 키로 테스트하다 세 번째 갈래(도구 실행 전에 `chat.send_message()` 자체가
+실패)를 놓쳤던 게 드러났다 — 상세는 아래 step-4 "실 API 키로 성공 경로 검증" 참고, 수정은
+`audit_hook.py`의 `begin_tracking()`/`was_logged()` 추적 플래그로 반영함.
+
+### step-4 : rag-agent 및 audit_engine 통합 테스트 시나리오 (완료 — 실 API 키로 성공 경로까지 검증)
 
 앞서 완료한 "감사 시나리오 검증"은 `AuditEvent`를 직접 구성해 audit_engine 파이프라인만 단독 검증한
 것이다. step-4는 그 반대편 — 실제 `/rag`, `/agent` HTTP 호출(문서 임베딩·검색 경유)이 끝난 뒤
@@ -348,18 +353,38 @@ end-to-end 테스트다.
 - `AuditEventClient` 동시 append 안전성: 스레드 30개로 직접 재현 → 유실/중복 없음 PASS
   (버그 발견 후 flush+fsync 수정 반영, "구현 중 발견한 이슈" 2번).
 
-**아직 검증 못한 것 (API 키 필요, 이 환경에서 불가능)**:
+**실 API 키로 성공 경로 검증 (완료)**
 
-- 도구별 정상 호출 시 `tool_name`이 실제로 올바른 값(`rag_query`/`direct_answer`/`list_documents`/
-  `document_summary`/`direct_llm_response`)으로 남는지 — 지금은 전부 도구 선택 이전 단계에서
-  실패하므로 `action="unknown"`으로만 기록됨.
-- 아래 "테스트할 항목"의 PII 마스킹 케이스, 정상 응답 텍스트, 실제 도구 선택 정확도.
-- 진짜 동시 HTTP 요청(TestClient는 동기 실행이라 실제 네트워크 동시성은 재현 안 됨 — 대신
-  `AuditEventClient`를 직접 스레드로 동시 호출해 같은 위험을 검증함).
+사용자가 실제 `GEMINI_API_KEY`(`gemini-2.5-flash`)를 제공해 위에서 "API 키 필요"로 남겨뒀던 항목을
+마저 검증했다. 키는 이번 세션의 셸 환경변수로만 썼고 어떤 파일에도 쓰거나 커밋하지 않았다 — 다만
+대화창에 평문으로 전달됐으므로 세션 기록이 남는 환경이면 노출된 것으로 보고 재발급을 권고했다.
 
-GEMINI_API_KEY가 있는 환경에서 아래 "조건"대로 재실행하면 성공 경로까지 마저 검증할 수 있다.
+- `/rag` 완전 성공: 문서 3건 임베딩(`gemini-embedding`, 3072차원) → 코사인 유사도 검색(hit
+  weather 0.7971) → 프롬프트 조립 → `gemini-2.5-flash` 응답 생성 → 200 OK, 정확한 답변("서울의
+  여름 날씨는 대체로 덥고 습하며...") — PASS.
+- `/agent` 도구 선택 정확도: `문서 목록 보여줘`→`tool_list_documents`, `문서 구성 요약해줘`→
+  `tool_document_summary`, `파이썬은 어떤 언어야?`→`tool_direct_answer`, `비행기 표 환불 규정
+  알려줘`(재시도)→`tool_rag` — 4종 전부 LLM이 스스로 올바른 도구를 골랐다(규칙 기반 없이) — PASS.
+- **실제 API 키로 테스트하다가 새 버그를 하나 더 발견**: `chat.send_message()` 자체가 어떤 도구도
+  호출하지 못한 채 실패하는 경우(실측: 임베딩 API 분당 쿼터 초과 429, 그리고 별도로 레거시
+  `google.generativeai` SDK에서 `KeyError: 'rag'`가 한 번 재현 — 동일 질문 재시도 시 정상 성공,
+  SDK 자체의 산발적 불안정으로 판단, 이 SDK가 지원 종료 상태라는 점과 일치하는 정황)가 실제로
+  발생했는데, 이 경우 어떤 도구도 `log_event()`를 호출한 적이 없어 감사 공백이 생겼다(요청은
+  실패했는데 감사 로그엔 아무 기록도 안 남음). **조치**: `audit_hook.py`에 `begin_tracking()`/
+  `was_logged()`/`end_tracking()` 추적 플래그 추가, `run_agent_with_trace()`가 `chat.send_message()`를
+  감싸서 "누구도 기록 안 했으면" 폴백으로 `action="unknown"`을 기록하도록 수정(도구가 이미 기록한
+  경우와 구분해 중복 기록은 안 함). 수정 후 재현 케이스로 재검증: `retry_tester`의 실패가
+  `action="unknown"`으로 정확히 1건 기록됨을 확인 — PASS.
+- CLI/직접 호출 성공 경로도 실제 확인: `4-agent.py`를 API 없이 직접 실행해 같은 질문을 다시 보내니
+  `actor="anonymous"`로 `rag_query`/`success`가 정확히 기록됨 — "감사 로깅 SDK 통일 리팩터"에서
+  주장한 "API 없이도 감사가 남는다"가 성공 경로에서도 성립함을 실측으로 확인.
+- 마스킹 오탐 재현: 실제 API 응답이 섞인 데이터를 배치(`python -m audit_engine`)에 통과시키니
+  이전에 발견했던 "주말에"→이름 오탐(masking.py의 간이 규칙 한계, "감사 시나리오 검증" 절 참고)이
+  실제 트래픽에서도 그대로 재현됨 — 알려진 한계이지 새 버그 아님, 실사용 시 유의사항으로 재확인.
+- 배치 파이프라인(`python -m audit_engine`, 성공/실패 섞인 실제 5건): hash_chain/masking/encryption/
+  retention 4단계 전부 PASS.
 
-**조건**
+**조건 (아래는 위 검증에 실제로 쓴 절차 — 참고용으로 유지)**
 
 1. 수동 테스트 방식
    - `uvicorn 5-api.py`로 API 기동 (`GEMINI_API_KEY` 필요 — [잔여 위험] 항목 참조).
