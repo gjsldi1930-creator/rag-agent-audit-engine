@@ -1,16 +1,22 @@
 """
-[step-4] rag-agent + audit_engine 통합 테스트 (end-to-end).
+[step-4] rag-agent + audit_engine 통합 테스트 (end-to-end) — 메인 실행 파일.
 
 "감사 시나리오 검증"(run_audit_scenarios.py)이 audit_engine을 단독으로 검증한 것과
 달리, 이 스크립트는 실제 5-api.py의 /rag, /agent 엔드포인트를 호출해 audit_hook.py가
 진짜로 raw_events.json에 기록을 남기는지, 그리고 그 결과가 다시 audit_engine 파이프라인을
 통과하는지까지 확인한다.
 
-GEMINI_API_KEY 가 없는 환경에서는 LLM 호출 자체가 실패한다 — 이는 의도적으로 실패
-경로(result="failure")가 감사 로그에 정상적으로 남는지 확인하는 데 쓴다. 성공 경로
-(실제 답변 생성)는 이 스크립트만으로는 검증할 수 없다 — plan.md step-4에 명시.
+GEMINI_API_KEY 유무에 따라 기대값이 자동으로 바뀐다:
+  - 키가 없으면: LLM 호출이 실패하는 게 정상이다 — 그 실패가 감사 로그에 정확히
+    남는지(result="failure")를 검증한다.
+  - 키가 있으면: 실제로 성공(status 200, result="success")하는지, 그리고 /agent의
+    도구 선택이 5개 값(rag_query/direct_answer/list_documents/document_summary/
+    direct_llm_response) 중 하나로 올바르게 기록되는지까지 검증한다.
+    (LLM이 어떤 도구를 고를지는 비결정적이라 "이 질문 -> 반드시 이 도구"는 강제하지
+    않는다 — plan.md step-3 "잔여 위험" 참고.)
 
 ■ 실행:
+  export GEMINI_API_KEY='...'   # 선택 — 없으면 실패 경로만 검증
   <venv>/bin/python3 Ch03/d06/scenarios/test_api_audit_flow.py
 """
 
@@ -18,12 +24,14 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
 
 RAG_AGENT_DIR = Path(__file__).resolve().parent.parent / "rag-agent"
 D06_DIR = Path(__file__).resolve().parent.parent
 RAW_EVENTS_PATH = D06_DIR / "outputs" / "raw_events" / "rag_agent_events.json"
+VALID_ACTIONS = {"rag_query", "direct_answer", "list_documents", "document_summary", "direct_llm_response"}
 
 
 def load_api_app():
@@ -43,12 +51,18 @@ def read_event_count() -> int:
 def main() -> None:
     from starlette.testclient import TestClient
 
+    has_key = bool(os.environ.get("GEMINI_API_KEY", "").strip())
+
+    print("=" * 78)
+    print(f" GEMINI_API_KEY 감지: {'있음 (성공 경로까지 검증)' if has_key else '없음 (실패 경로만 검증)'}")
+    print("=" * 78)
+
     api = load_api_app()
     client = TestClient(api.app)
 
     all_passed = True
 
-    print("=" * 78)
+    print("\n" + "=" * 78)
     print(" 1) API 기본 라우트 (Gemini 불필요)")
     print("=" * 78)
     for path in ("/health", "/documents", "/tools"):
@@ -58,7 +72,7 @@ def main() -> None:
         print(f"[{'PASS' if ok else 'FAIL'}] GET {path} -> {resp.status_code}")
 
     print("\n" + "=" * 78)
-    print(" 2) /rag, /agent 호출 -> 감사 로그 append 확인 (GEMINI_API_KEY 없는 환경)")
+    print(f" 2) /rag, /agent 호출 -> 감사 로그 append 확인 ({'성공' if has_key else '실패'} 경로 검증)")
     print("=" * 78)
 
     cases = [
@@ -71,32 +85,40 @@ def main() -> None:
             "/agent",
             json={"question": "주말에 고객 지원 받을 수 있어?"},
             headers={"X-Actor": "tester_lee", "X-Role": "qa", "X-Department": "qa-team"},
-        ), None),  # tool_name 은 실패 시 "unknown" 으로 고정되므로 사전에 알 수 없음
+        ), None),  # /agent 의 action은 도구 선택 결과라 사전에 특정 값으로 강제하지 않음
     ]
 
-    for label, call, expected_action in cases:
+    for label, call, expected_action_no_key in cases:
         before = read_event_count()
         resp = call()
         after = read_event_count()
 
-        # GEMINI_API_KEY 가 없으면 require_gemini() 가 SystemExit -> translate_error()가 500 반환.
-        status_ok = resp.status_code == 500
+        if has_key:
+            status_ok = resp.status_code == 200
+            expected_result = "success"
+        else:
+            # GEMINI_API_KEY 가 없으면 require_gemini() 가 SystemExit -> translate_error()가 500 반환.
+            status_ok = resp.status_code == 500
+            expected_result = "failure"
         count_ok = after == before + 1
         passed = status_ok and count_ok
         all_passed = all_passed and passed
 
-        print(f"[{'PASS' if passed else 'FAIL'}] {label}: status={resp.status_code}(기대 500, API 키 없음) "
-              f"raw_events 개수 {before}->{after}(기대 +1)")
+        print(f"[{'PASS' if passed else 'FAIL'}] {label}: status={resp.status_code}"
+              f"(기대 {'200' if has_key else '500'}) raw_events 개수 {before}->{after}(기대 +1)")
 
         if count_ok:
             last_event = json.loads(RAW_EVENTS_PATH.read_text(encoding="utf-8"))[-1]
             print(f"       기록된 이벤트: actor={last_event['actor']} action={last_event['action']} "
                   f"result={last_event['result']}")
-            if last_event["result"] != "failure":
-                print("       [FAIL] result 필드가 failure 로 기록되지 않음")
+            if last_event["result"] != expected_result:
+                print(f"       [FAIL] result 기대={expected_result} 실측={last_event['result']}")
                 all_passed = False
-            if expected_action and last_event["action"] != expected_action:
-                print(f"       [FAIL] action 기대값={expected_action} 실측={last_event['action']}")
+            if last_event["action"] not in VALID_ACTIONS and last_event["action"] != "unknown":
+                print(f"       [FAIL] action 값이 유효 목록에 없음: {last_event['action']}")
+                all_passed = False
+            if not has_key and expected_action_no_key and last_event["action"] != expected_action_no_key:
+                print(f"       [FAIL] action 기대값={expected_action_no_key} 실측={last_event['action']}")
                 all_passed = False
 
     print(f"\n=> API 연동 감사 로그 테스트: {'PASS' if all_passed else 'FAIL'}")
@@ -130,15 +152,17 @@ def main() -> None:
         rag_direct.loader.exec_module(rag_module)
         rag_module.run_rag("직접 호출 테스트 질문", top_k=1)
     except BaseException:
-        pass  # GEMINI_API_KEY 없는 환경에서는 실패가 정상 — 로그가 남는지만 확인
+        pass  # 키가 없으면 실패가 정상 — 로그가 남는지만 확인
     after = read_event_count()
     direct_call_ok = after == before + 1
     if direct_call_ok:
         last_event = json.loads(RAW_EVENTS_PATH.read_text(encoding="utf-8"))[-1]
         context_ok = last_event["actor"] == "anonymous" and last_event["source_ip"] == "local"
-        direct_call_ok = direct_call_ok and context_ok
+        result_ok = last_event["result"] == ("success" if has_key else "failure")
+        direct_call_ok = direct_call_ok and context_ok and result_ok
         print(f"[{'PASS' if direct_call_ok else 'FAIL'}] run_rag() 직접 호출: raw_events 개수 {before}->{after}(기대 +1), "
-              f"actor={last_event['actor']}(기대 anonymous) source_ip={last_event['source_ip']}(기대 local)")
+              f"actor={last_event['actor']}(기대 anonymous) source_ip={last_event['source_ip']}(기대 local) "
+              f"result={last_event['result']}")
     else:
         print(f"[FAIL] run_rag() 직접 호출: raw_events 개수 {before}->{after}(기대 +1) — 로그가 안 남음")
     all_passed = all_passed and direct_call_ok
